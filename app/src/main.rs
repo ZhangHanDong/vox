@@ -20,6 +20,7 @@ const MENU_LANG_EN: u64 = 11;
 const MENU_LANG_ZH_TW: u64 = 12;
 const MENU_LANG_JA: u64 = 13;
 const MENU_LANG_KO: u64 = 14;
+const MENU_LANG_WEN: u64 = 15;
 const MENU_LLM_TOGGLE: u64 = 20;
 const MENU_SETTINGS: u64 = 21;
 const MENU_TEST_CAPSULE: u64 = 99;
@@ -90,50 +91,8 @@ script_mod! {
                                 }
                             }
                             new_batch: true
-                            waveform := View{
-                                width: 44 height: 32
-                                draw_bg +: {
-                                    pixel: fn() {
-                                        let sdf = Sdf2d.viewport(self.pos * self.rect_size)
-                                        let h = self.rect_size.y
-                                        let bar_w = 3.5
-                                        let gap = 3.0
-                                        let total = bar_w * 5.0 + gap * 4.0
-                                        let sx = (self.rect_size.x - total) * 0.5
-                                        let cy = h * 0.5
-                                        let t = self.draw_pass.time
-
-                                        let w0 = 0.5
-                                        let w1 = 0.8
-                                        let w2 = 1.0
-                                        let w3 = 0.75
-                                        let w4 = 0.55
-
-                                        let idle = 0.25
-                                        let a0 = idle + (0.5 + 0.5 * sin(t * 3.0 + 0.0)) * w0 * 0.3
-                                        let a1 = idle + (0.5 + 0.5 * sin(t * 3.5 + 1.2)) * w1 * 0.3
-                                        let a2 = idle + (0.5 + 0.5 * sin(t * 4.0 + 2.4)) * w2 * 0.3
-                                        let a3 = idle + (0.5 + 0.5 * sin(t * 3.2 + 3.6)) * w3 * 0.3
-                                        let a4 = idle + (0.5 + 0.5 * sin(t * 2.8 + 4.8)) * w4 * 0.3
-
-                                        let bh0 = max(6.0, a0 * h)
-                                        sdf.box(sx, cy - bh0 * 0.5, bar_w, bh0, 1.5)
-                                        sdf.fill(#xffffffdd)
-                                        let bh1 = max(6.0, a1 * h)
-                                        sdf.box(sx + bar_w + gap, cy - bh1 * 0.5, bar_w, bh1, 1.5)
-                                        sdf.fill(#xffffffdd)
-                                        let bh2 = max(6.0, a2 * h)
-                                        sdf.box(sx + 2.0 * (bar_w + gap), cy - bh2 * 0.5, bar_w, bh2, 1.5)
-                                        sdf.fill(#xffffffdd)
-                                        let bh3 = max(6.0, a3 * h)
-                                        sdf.box(sx + 3.0 * (bar_w + gap), cy - bh3 * 0.5, bar_w, bh3, 1.5)
-                                        sdf.fill(#xffffffdd)
-                                        let bh4 = max(6.0, a4 * h)
-                                        sdf.box(sx + 4.0 * (bar_w + gap), cy - bh4 * 0.5, bar_w, bh4, 1.5)
-                                        sdf.fill(#xffffffdd)
-                                        return sdf.result
-                                    }
-                                }
+                            waveform := LoadingSpinner{
+                                width: 28 height: 28
                             }
                             transcript_label := Label{
                                 width: Fit
@@ -164,7 +123,7 @@ script_mod! {
 
                         Label{ text: "Language" draw_text.color: #xaaaaaa draw_text.text_style.font_size: 11 }
                         language_dropdown := DropDown{
-                            labels: ["简体中文", "English", "繁體中文", "日本語", "한국어"]
+                            labels: ["简体中文", "English", "繁體中文", "日本語", "한국어", "文言文"]
                         }
 
                         Hr{}
@@ -283,6 +242,8 @@ impl App {
                 { let mut m = MenuItem::new("繁體中文", MENU_LANG_ZH_TW); m.checked = lang == "zh-TW"; m },
                 { let mut m = MenuItem::new("日本語", MENU_LANG_JA); m.checked = lang == "ja"; m },
                 { let mut m = MenuItem::new("한국어", MENU_LANG_KO); m.checked = lang == "ko"; m },
+                MenuItem::separator(),
+                { let mut m = MenuItem::new("文言文", MENU_LANG_WEN); m.checked = lang == "wen"; m },
             ]),
             MenuItem::separator(),
             MenuItem::submenu("LLM Refinement", vec![
@@ -323,6 +284,7 @@ impl App {
             MENU_LANG_ZH_TW => { self.inner.config.language = "zh-TW".into(); self.refresh_menu(); }
             MENU_LANG_JA => { self.inner.config.language = "ja".into(); self.refresh_menu(); }
             MENU_LANG_KO => { self.inner.config.language = "ko".into(); self.refresh_menu(); }
+            MENU_LANG_WEN => { self.inner.config.language = "wen".into(); self.refresh_menu(); }
             MENU_LLM_TOGGLE => {
                 self.inner.config.llm_refine.enabled = !self.inner.config.llm_refine.enabled;
                 self.refresh_menu();
@@ -349,7 +311,7 @@ impl App {
             .set_text(cx, &cfg.llm_refine.model);
 
         let lang_idx = match cfg.language.as_str() {
-            "zh" => 0, "en" => 1, "zh-TW" => 2, "ja" => 3, "ko" => 4, _ => 0,
+            "zh" => 0, "en" => 1, "zh-TW" => 2, "ja" => 3, "ko" => 4, "wen" => 5, _ => 0,
         };
         self.ui.drop_down(cx, ids!(language_dropdown))
             .set_selected_item(cx, lang_idx);
@@ -369,7 +331,7 @@ impl App {
         self.inner.config.llm_refine.api_key = llm_key;
         self.inner.config.llm_refine.model = llm_model;
         self.inner.config.language = match lang_idx {
-            0 => "zh", 1 => "en", 2 => "zh-TW", 3 => "ja", 4 => "ko", _ => "zh",
+            0 => "zh", 1 => "en", 2 => "zh-TW", 3 => "ja", 4 => "ko", 5 => "wen", _ => "zh",
         }.to_string();
 
         match config::save_config(&self.inner.config) {
@@ -414,8 +376,14 @@ impl App {
     fn show_settings(&mut self, cx: &mut Cx) {
         self.populate_settings(cx);
         let settings = self.ui.window(cx, ids!(settings_window));
-        settings.resize(cx, dvec2(480.0, 560.0));
-        settings.reposition(cx, dvec2(500.0, 200.0));
+        // configure_window triggers makeKeyAndOrderFront on macOS
+        settings.configure_window(
+            cx,
+            dvec2(480.0, 560.0),
+            dvec2(500.0, 200.0),
+            false,
+            "Voice Input Settings".to_string(),
+        );
     }
 
     fn start_recording(&mut self, cx: &mut Cx) {
@@ -477,11 +445,25 @@ impl App {
         self.inner.last_transcription = text.to_string();
         self.ui.label(cx, ids!(transcript_label)).set_text(cx, text);
 
-        // LLM refine if enabled
+        // LLM refine if enabled, or forced for Traditional Chinese (ASR only outputs simplified)
         let cfg = &self.inner.config.llm_refine;
-        if cfg.enabled && !cfg.api_base_url.is_empty() {
+        let needs_llm = cfg.enabled
+            || self.inner.config.language == "zh-TW"   // simplified→traditional
+            || self.inner.config.language == "en"       // translation
+            || self.inner.config.language == "wen";     // 白话→文言文
+        if needs_llm && !cfg.api_base_url.is_empty() && !cfg.api_key.is_empty() {
             self.inner.state = STATE_REFINING;
             self.ui.label(cx, ids!(transcript_label)).set_text(cx, "Refining...");
+            // Map ISO code to full language name for LLM
+            let target_lang = match self.inner.config.language.as_str() {
+                "zh" => "Chinese",
+                "en" => "English",
+                "zh-TW" => "Traditional Chinese",
+                "ja" => "Japanese",
+                "ko" => "Korean",
+                "wen" => "Classical Chinese (文言文)",
+                _ => "Chinese",
+            };
             llm_refine::send_refine_request(
                 cx,
                 &cfg.api_base_url,
@@ -489,6 +471,7 @@ impl App {
                 &cfg.model,
                 &cfg.system_prompt,
                 text,
+                target_lang,
             );
         } else {
             self.inject_text(cx, text);
@@ -522,13 +505,12 @@ impl App {
     }
 
     fn update_waveform(&mut self, cx: &mut Cx) {
-        // Read RMS for smoothing (will be used when we add custom DrawWaveform)
         let raw_rms = self.inner.audio.read_rms();
         let alpha = if raw_rms > self.inner.smooth_rms { 0.4 } else { 0.15 };
         self.inner.smooth_rms += (raw_rms - self.inner.smooth_rms) * alpha;
 
-        // Redraw waveform view to trigger shader re-evaluation (uses draw_pass.time)
-        self.ui.view(cx, ids!(waveform)).redraw(cx);
+        // Redraw the entire capsule window to update draw_pass.time in shader
+        self.ui.widget(cx, ids!(capsule_window)).redraw(cx);
     }
 }
 

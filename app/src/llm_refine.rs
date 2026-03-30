@@ -10,6 +10,7 @@ pub fn send_refine_request(
     model: &str,
     system_prompt: &str,
     text: &str,
+    target_language: &str,
 ) {
     let url = format!(
         "{}/v1/chat/completions",
@@ -20,7 +21,7 @@ pub fn send_refine_request(
         r#"{{"model":"{}","messages":[{{"role":"system","content":{}}},{{"role":"user","content":{}}}],"temperature":0.1,"max_tokens":2048}}"#,
         model,
         serde_json::to_string(system_prompt).unwrap_or_default(),
-        serde_json::to_string(text).unwrap_or_default(),
+        serde_json::to_string(&format!("[目标语言:{}] {}", target_language, text)).unwrap_or_default(),
     );
 
     let mut req = HttpRequest::new(url, HttpMethod::POST);

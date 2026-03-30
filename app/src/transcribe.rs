@@ -10,13 +10,22 @@ pub const TRANSCRIBE_REQUEST_ID: LiveId = live_id!(transcribe);
 pub fn send_transcribe_request(cx: &mut Cx, base_url: &str, wav_data: &[u8], language: &str) {
     let url = format!("{}/v1/audio/transcriptions", base_url.trim_end_matches('/'));
 
-    // Base64 encode the WAV data
+    // Qwen3-ASR expects full language names, not ISO codes
+    let asr_language = match language {
+        "zh" => "Chinese",
+        "en" => "English",
+        "ja" => "Japanese",
+        "ko" => "Korean",
+        "zh-TW" => "Chinese",
+        "wen" => "Chinese",  // 文言文：用中文 ASR 识别白话，LLM 转文言
+        _ => language,
+    };
+
     let b64 = base64_encode(wav_data);
 
-    // Build JSON body
     let body = format!(
         r#"{{"file":"{}","language":"{}","model":"qwen3-asr"}}"#,
-        b64, language
+        b64, asr_language
     );
 
     let mut req = HttpRequest::new(url, HttpMethod::POST);
