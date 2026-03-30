@@ -1,0 +1,14 @@
+[package]
+name = "macos-sys"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossbeam-channel = "0.5"
+thiserror = "2"
+log = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.24"
+makepad-objc-sys = { path = "/Users/zhangalex/Work/Projects/FW/robius/makepad/libs/objc-sys" }
