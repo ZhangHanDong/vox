@@ -17,8 +17,11 @@ estimate: 2d
 - 音频每 30 秒自动分段（可配置），每段独立发送 ASR 转录
 - 转录请求串行发送（同时最多一个 in-flight），其余排队
 - 会议结束后全文发给 LLM 生成结构化纪要（可配置关闭）
-- 输出为 Markdown 文件，保存到 `~/Documents/Vox/`（可配置）
-- 文件名格式: `meeting_YYYY-MM-DD_HHMMSS.md`
+- 每次会议保存为独立目录: `~/Documents/Vox/meeting_YYYY-MM-DD_HHMMSS/`
+- 目录内包含两个文件:
+  - `transcript.md` — 完整原始转录文本（每个 chunk 带时间戳，逐字记录）
+  - `summary.md` — LLM 生成的结构化纪要（摘要/要点/决策/Action Items）
+- 即使 LLM 纪要生成失败，transcript.md 仍然保存
 - 胶囊窗口在会议期间显示录音时长和分段计数
 - 菜单栏图标在会议期间变为 "📝"
 - 新增 `app/src/meeting.rs` 模块，独立封装会议逻辑
@@ -136,30 +139,46 @@ estimate: 2d
   并且 system prompt 要求输出 Summary/Key Points/Decisions/Action Items
   并且 胶囊显示 "📝 Generating summary..."
 
-场景: 保存 Markdown 文件
-  测试: test_save_markdown
-  假设 LLM 纪要已生成（或 auto_summary 关闭）
-  当 保存会议纪要
-  那么 在 ~/Documents/Vox/ 目录下生成 meeting_YYYY-MM-DD_HHMMSS.md
-  并且 文件包含标题、时长、语言、Transcript（带时间戳）
-  并且 如果有 LLM 纪要，包含 Summary/Key Points/Decisions/Action Items
-  并且 胶囊显示 "📝 Saved: /path/to/file.md"
+场景: 保存完整转录文本
+  测试: test_save_transcript
+  假设 会议结束且所有 chunk 已转录
+  当 保存会议数据
+  那么 创建目录 ~/Documents/Vox/meeting_YYYY-MM-DD_HHMMSS/
+  并且 生成 transcript.md 包含:
+    | 内容 | 说明 |
+    | 标题 | # Meeting Transcript — YYYY-MM-DD HH:MM |
+    | 元信息 | Duration, Language, Chunks |
+    | 全文 | 每段带 [MM:SS] 时间戳的原始转录文本 |
+  并且 transcript.md 始终保存（不依赖 LLM）
+
+场景: LLM 生成结构化纪要文件
+  测试: test_save_summary
+  假设 auto_summary 开启且 LLM 返回成功
+  当 LLM 纪要生成完成
+  那么 在同一目录下生成 summary.md 包含:
+    | 章节 | 内容 |
+    | Summary | LLM 生成的摘要 |
+    | Key Points | LLM 生成的要点 |
+    | Decisions | LLM 生成的决策 |
+    | Action Items | LLM 生成的待办 |
+  并且 胶囊显示 "📝 Saved: /path/to/meeting_.../"
   并且 3 秒后胶囊自动隐藏
   并且 状态恢复为 STATE_IDLE
 
-场景: 无 LLM 时仅保存原始转录
+场景: 无 LLM 时仅保存转录
   测试: test_save_without_summary
   假设 auto_summary 为 false 或 LLM API 未配置
   当 所有 chunk 转录完成
-  那么 直接保存 Markdown（无 Summary 章节）
-  并且 Transcript 部分仍包含时间戳
+  那么 只生成 transcript.md（无 summary.md）
+  并且 transcript.md 包含完整带时间戳的文本
 
 场景: LLM 纪要生成失败时降级
   测试: test_summary_fallback
   假设 LLM API 返回错误或超时
   当 处理 LLM 响应
-  那么 保存 Markdown（无 Summary 章节）
-  并且 文件末尾注明 "(Summary generation failed)"
+  那么 transcript.md 已保存（不受影响）
+  并且 不生成 summary.md
+  并且 胶囊显示 "📝 Summary failed, transcript saved"
   并且 不阻塞流程
 
 场景: chunk 转录失败
@@ -202,18 +221,26 @@ estimate: 2d
   那么 自动创建 ~/Documents/Vox/ 目录
   并且 会议正常开始
 
-场景: Markdown 文件格式正确
-  测试: test_markdown_format
+场景: transcript.md 文件格式正确
+  测试: test_transcript_format
   假设 会议持续 2 分钟，产生 4 个 chunk
   当 会议结束并保存
-  那么 Markdown 文件包含:
+  那么 transcript.md 包含:
     | 章节 | 内容 |
-    | # Meeting Minutes — YYYY-MM-DD HH:MM | 标题 |
+    | # Meeting Transcript — YYYY-MM-DD HH:MM | 标题 |
     | Duration | 2m 0s |
     | Language | 当前语言设置 |
     | Chunks | 4 |
-    | ## Transcript | 4 段带 [MM:SS] 时间戳的文本 |
-    | ## Summary | LLM 生成的摘要（如有） |
-    | ## Key Points | LLM 生成的要点（如有） |
-    | ## Decisions | LLM 生成的决策（如有） |
-    | ## Action Items | LLM 生成的待办（如有） |
+    | 正文 | 4 段带 [00:00] [00:30] [01:00] [01:30] 时间戳的逐字转录 |
+
+场景: summary.md 文件格式正确
+  测试: test_summary_format
+  假设 LLM 纪要已生成
+  当 保存 summary.md
+  那么 文件包含:
+    | 章节 | 内容 |
+    | # Meeting Summary — YYYY-MM-DD HH:MM | 标题 |
+    | ## Summary | 2-3 句概述 |
+    | ## Key Points | 要点列表 |
+    | ## Decisions | 决策列表（如有） |
+    | ## Action Items | 待办列表（如有） |
