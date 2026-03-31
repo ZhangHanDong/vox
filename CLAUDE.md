@@ -12,9 +12,10 @@ Task contracts and implementation plan are in `specs/`:
 - `specs/phase3-transcribe-inject.spec.md` — Phase 3: ominix-api 转录 + 剪贴板注入
 - `specs/phase4-llm-settings.spec.md` — Phase 4: LLM refine + 设置窗口 + 完整菜单
 - `specs/phase5-polish.spec.md` — Phase 5: 动画打磨 + .app bundle 打包
+- `specs/v0.1-release.spec.md` — **v0.1 actual implementation baseline** (23 scenarios, matches code)
 - `specs/PLAN.md` — Implementation plan with review checkpoints
 
-When implementing a phase, read the corresponding spec first. Each spec contains BDD scenarios that define "done".
+When implementing a phase, read the corresponding spec first. The v0.1-release spec is the authoritative record of what the code actually does.
 
 ## Project Structure
 

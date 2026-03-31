@@ -1,6 +1,18 @@
 # Implementation Plan
 
 > Generated from specs/*.spec.md | 2026-03-30
+> Updated: 2026-03-31 — v0.1 released, specs reconciled with code
+
+## v0.1 Release Status
+
+All phases implemented. See `specs/v0.1-release.spec.md` for actual implementation baseline.
+
+**Key deviations from original plan:**
+- Waveform → pulsing dot (Splash `instance` limitation)
+- Multipart HTTP → JSON + base64 (ominix-api format)
+- `show_in_dock(false)` removed (kills NSStatusItem)
+- Config path: `~/.config/vox/` (renamed from makepad-voice-input)
+- Added: 文言文 mode, LLM translation, MOONSHOT_API_KEY env var
 
 ## Dependency Graph
 
