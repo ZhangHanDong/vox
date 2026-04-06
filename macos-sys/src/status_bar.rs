@@ -3,7 +3,6 @@ use crossbeam_channel::Receiver;
 use makepad_objc_sys::runtime::{Class, Object, Sel, YES, NO};
 use makepad_objc_sys::{class, msg_send, sel, sel_impl};
 use std::ffi::c_void;
-use std::sync::Once;
 
 type ObjcId = *mut Object;
 
@@ -31,6 +30,7 @@ impl MenuItem {
 static MENU_TX: std::sync::OnceLock<crossbeam_channel::Sender<u64>> = std::sync::OnceLock::new();
 
 fn str_to_nsstring(s: &str) -> ObjcId {
+    // SAFETY: alloc+initWithBytes from valid UTF-8, autoreleased to prevent leak.
     unsafe {
         let ns_string: ObjcId = msg_send![class!(NSString), alloc];
         let ns_string: ObjcId = msg_send![
@@ -39,31 +39,32 @@ fn str_to_nsstring(s: &str) -> ObjcId {
             length: s.len()
             encoding: 4u64 // NSUTF8StringEncoding
         ];
+        let _: ObjcId = msg_send![ns_string, autorelease];
         ns_string
     }
 }
 
+/// ObjC class registered once, stored as usize for Send+Sync safety.
 fn ensure_menu_target_class() -> *const Class {
-    static REGISTER: Once = Once::new();
-    static mut TARGET_CLASS: *const Class = std::ptr::null();
+    static TARGET_CLASS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
-    REGISTER.call_once(|| {
+    let ptr = TARGET_CLASS.get_or_init(|| {
+        // SAFETY: Registering a new ObjC class with the runtime. This is safe because:
+        // - ClassDecl::new returns None if the class already exists
+        // - The method signature matches extern "C" fn(&Object, Sel, ObjcId)
+        // - menu_action wraps its body in catch_unwind to prevent panic crossing FFI
         unsafe {
             let superclass = class!(NSObject);
             let mut decl = makepad_objc_sys::declare::ClassDecl::new("VoiceInputMenuTarget", superclass).unwrap();
 
-            // Read action_id from sender's tag, not from ivar
             extern "C" fn menu_action(_this: &Object, _sel: Sel, sender: ObjcId) {
-                unsafe {
-                    let tag: i64 = msg_send![sender, tag];
-                    use std::io::Write;
-                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/voice_input_debug.log") {
-                        let _ = writeln!(f, "MENU: tag={}", tag);
-                    }
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // SAFETY: msg_send![sender, tag] returns 0 if sender is nil (ObjC nil-messaging).
+                    let tag: i64 = unsafe { msg_send![sender, tag] };
                     if let Some(tx) = MENU_TX.get() {
                         let _ = tx.try_send(tag as u64);
                     }
-                }
+                }));
             }
 
             decl.add_method(
@@ -71,33 +72,36 @@ fn ensure_menu_target_class() -> *const Class {
                 menu_action as extern "C" fn(&Object, Sel, ObjcId),
             );
 
-            TARGET_CLASS = decl.register();
+            decl.register() as *const Class as usize
         }
     });
-
-    unsafe { TARGET_CLASS }
+    *ptr as *const Class
 }
 
-/// Single global target instance, retained forever.
+/// Global singleton menu target instance, retained forever. Stored as usize for Send+Sync.
 fn global_menu_target() -> ObjcId {
-    static mut TARGET: ObjcId = std::ptr::null_mut();
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
+    static TARGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+    let ptr = TARGET.get_or_init(|| {
+        // SAFETY: Creates one ObjC object of our registered class. Retained to prevent dealloc.
         unsafe {
             let cls = ensure_menu_target_class();
             let obj: ObjcId = msg_send![cls, new];
             let () = msg_send![obj, retain];
-            TARGET = obj;
+            obj as usize
         }
     });
-    unsafe { TARGET }
+    *ptr as ObjcId
 }
 
+/// Handle to the macOS status bar item.
+///
+/// NOT Send — NSStatusItem must only be accessed from the main thread (AppKit requirement).
+/// All methods (update_menu, set_status_bar_icon, Drop) send ObjC messages that are
+/// only safe on the main thread.
 pub struct StatusBarHandle {
     item: ObjcId,
 }
-
-unsafe impl Send for StatusBarHandle {}
 
 pub fn create_status_bar(
     _icon_png_data: &[u8],
@@ -106,6 +110,9 @@ pub fn create_status_bar(
     let (tx, rx) = crossbeam_channel::unbounded();
     let _ = MENU_TX.set(tx);
 
+    // SAFETY: NSStatusBar.systemStatusBar returns a singleton (never null).
+    // statusItemWithLength:-1 creates a variable-width item. item is retained
+    // via explicit retain call below; released in Drop.
     unsafe {
         let status_bar: ObjcId = msg_send![class!(NSStatusBar), systemStatusBar];
         let item: ObjcId = msg_send![status_bar, statusItemWithLength: -1.0f64];
@@ -132,6 +139,9 @@ pub fn create_status_bar(
     }
 }
 
+/// SAFETY: Caller must ensure this runs on the main thread (AppKit requirement).
+/// All NSMenu/NSMenuItem allocations are autoreleased. The global_menu_target()
+/// singleton is retained forever and safe to reference from any menu item.
 unsafe fn build_ns_menu(items: &[MenuItem]) -> ObjcId {
     let menu: ObjcId = msg_send![class!(NSMenu), new];
     let () = msg_send![menu, setAutoenablesItems: NO];
@@ -178,6 +188,7 @@ unsafe fn build_ns_menu(items: &[MenuItem]) -> ObjcId {
 }
 
 pub fn update_menu(handle: &StatusBarHandle, menu_items: Vec<MenuItem>) {
+    // SAFETY: setMenu: on a valid NSStatusItem. Old menu is released by AppKit.
     unsafe {
         let menu = build_ns_menu(&menu_items);
         let () = msg_send![handle.item, setMenu: menu];
@@ -185,6 +196,7 @@ pub fn update_menu(handle: &StatusBarHandle, menu_items: Vec<MenuItem>) {
 }
 
 pub fn set_status_bar_icon(handle: &StatusBarHandle, title: &str) {
+    // SAFETY: button returns nil if no button (null-checked). setTitle: accepts valid NSString.
     unsafe {
         let button: ObjcId = msg_send![handle.item, button];
         if !button.is_null() {
@@ -196,6 +208,9 @@ pub fn set_status_bar_icon(handle: &StatusBarHandle, title: &str) {
 
 impl Drop for StatusBarHandle {
     fn drop(&mut self) {
+        // SAFETY: removeStatusItem: detaches from status bar. release balances
+        // the retain in create_status_bar. Must run on main thread (enforced by
+        // StatusBarHandle not being Send).
         unsafe {
             let status_bar: ObjcId = msg_send![class!(NSStatusBar), systemStatusBar];
             let () = msg_send![status_bar, removeStatusItem: self.item];

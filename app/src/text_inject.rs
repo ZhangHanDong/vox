@@ -23,9 +23,13 @@ pub struct InjectState {
 }
 
 impl InjectState {
-    /// Begin text injection. Returns immediately after simulating Cmd+V.
-    /// Caller must call `restore()` after a short delay (e.g., 50ms).
+    /// Begin text injection via clipboard + Cmd+V simulation.
+    ///
+    /// WARNING: Temporarily clobbers the user's clipboard for ~80ms.
+    /// The original content is saved and restored in `restore()`.
+    /// Caller must call `restore()` after a short delay to minimize the window.
     pub fn inject(&mut self, text: &str) {
+        // Save original clipboard before clobbering
         self.original_clipboard = macos_sys::clipboard::read_clipboard();
 
         self.was_cjk = macos_sys::input_source::is_cjk_input_source();

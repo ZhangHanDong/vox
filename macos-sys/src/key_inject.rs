@@ -23,6 +23,9 @@ extern "C" {
 
 /// Simulate Cmd+V paste keystroke.
 pub fn simulate_cmd_v() {
+    // SAFETY: CGEventCreateKeyboardEvent returns null on failure (checked).
+    // CGEventPost posts to HID event tap (requires Accessibility permission).
+    // CFRelease frees each event after posting. 10ms sleep ensures key-up follows key-down.
     unsafe {
         // Key down
         let key_down = CGEventCreateKeyboardEvent(std::ptr::null_mut(), K_VK_V, true);

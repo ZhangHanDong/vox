@@ -17,6 +17,7 @@ extern "C" {
 }
 
 fn str_to_nsstring(s: &str) -> ObjcId {
+    // SAFETY: alloc+initWithBytes from valid UTF-8, autoreleased to prevent leak.
     unsafe {
         let ns_string: ObjcId = msg_send![class!(NSString), alloc];
         let ns_string: ObjcId = msg_send![
@@ -25,10 +26,13 @@ fn str_to_nsstring(s: &str) -> ObjcId {
             length: s.len()
             encoding: 4u64
         ];
+        let _: ObjcId = msg_send![ns_string, autorelease];
         ns_string
     }
 }
 
+/// SAFETY: cf_str must be a valid CFStringRef (toll-free bridged to NSString) or null.
+/// Null is handled. UTF8String buffer is copied immediately into Rust String.
 unsafe fn cfstring_to_rust(cf_str: *mut c_void) -> Option<String> {
     if cf_str.is_null() {
         return None;
@@ -43,6 +47,8 @@ unsafe fn cfstring_to_rust(cf_str: *mut c_void) -> Option<String> {
 }
 
 pub fn current_input_source_id() -> String {
+    // SAFETY: TISCopy returns owned ref (CFRelease'd below). TISGetInputSourceProperty
+    // returns non-owned ref (no release needed). Null checks on both.
     unsafe {
         let source = TISCopyCurrentKeyboardInputSource();
         if source.is_null() { return String::new(); }
@@ -64,6 +70,8 @@ pub fn is_cjk_input_source() -> bool {
 }
 
 pub fn select_ascii_input_source() -> Result<(), MacosError> {
+    // SAFETY: TISCopyInputSourceForLanguage returns owned ref (CFRelease'd).
+    // TISSelectInputSource is safe to call with a valid source ref.
     unsafe {
         let lang = str_to_nsstring("en") as *mut c_void;
         let source = TISCopyInputSourceForLanguage(lang);
@@ -80,6 +88,8 @@ pub fn select_ascii_input_source() -> Result<(), MacosError> {
 }
 
 pub fn select_input_source(id: &str) -> Result<(), MacosError> {
+    // SAFETY: TISCreateInputSourceList returns owned CFArray (CFRelease'd on both paths).
+    // objectAtIndex:0 is bounds-checked (count > 0 verified).
     unsafe {
         let criteria = str_to_nsstring(id) as *mut c_void;
         let key = kTISPropertyInputSourceID;

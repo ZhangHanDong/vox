@@ -460,8 +460,8 @@ impl App {
         let capsule = self.ui.window(cx, ids!(capsule_window));
         let win_w = 400.0;
         let win_h = 90.0;
-        let screen_w = 3440.0;
-        let screen_h = 1440.0;
+        // Get screen size dynamically (avoid hardcoding)
+        let (screen_w, screen_h) = get_main_screen_size();
         let x = (screen_w - win_w) / 2.0;
         let y = screen_h - win_h - 80.0;
         capsule.resize(cx, dvec2(win_w, win_h));
@@ -860,6 +860,28 @@ impl App {
             self.ui.label(cx, ids!(transcript_label)).set_text(cx, &display);
         }
     }
+}
+
+/// Get main screen size via NSScreen (macOS).
+fn get_main_screen_size() -> (f64, f64) {
+    #[cfg(target_os = "macos")]
+    {
+        use makepad_widgets::makepad_platform::makepad_objc_sys::{msg_send, class, sel, sel_impl};
+        use makepad_widgets::makepad_platform::makepad_objc_sys::runtime::Object;
+        type ObjcId = *mut Object;
+        // SAFETY: NSScreen.mainScreen returns nil if no screen (null-checked).
+        // NSRect layout matches CGRect {CGPoint, CGSize} = {f64, f64, f64, f64} on 64-bit.
+        unsafe {
+            let main_screen: ObjcId = msg_send![class!(NSScreen), mainScreen];
+            if !main_screen.is_null() {
+                #[repr(C)]
+                struct NSRect { x: f64, y: f64, w: f64, h: f64 }
+                let frame: NSRect = msg_send![main_screen, frame];
+                return (frame.w, frame.h);
+            }
+        }
+    }
+    (1440.0, 900.0) // safe fallback
 }
 
 impl MatchEvent for App {

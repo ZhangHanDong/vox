@@ -1,6 +1,12 @@
 # vox — Claude Code Instructions
 
+## Required Reading
+
 See [DESIGN.md](DESIGN.md) for the architectural overview and design decisions.
+
+Before starting review code, read these documents:
+
+1. **[UNSAFE-REVIEW.md](UNSAFE-REVIEW.md)** — Unsafe Rust Safety Abstract.
 
 ## Specs & Plan
 
@@ -100,7 +106,7 @@ OminiX-MLX source is at `/Users/zhangalex/Work/Projects/FW/robius/OminiX-MLX/`. 
 
 ### Rust Edition & Style
 
-- **Edition**: `edition = "2024"` in all Cargo.toml files
+- **Edition**: `edition = "2021"` in all Cargo.toml files
 - Use `thiserror` for error types in `macos-sys`, `anyhow` in `app`
 - Explicit error handling, no `.unwrap()` in production paths
 - `#![warn(clippy::all)]` in lib.rs / main.rs
