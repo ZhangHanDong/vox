@@ -572,12 +572,14 @@ impl App {
         self.inner.last_transcription = text.to_string();
         self.ui.label(cx, ids!(transcript_label)).set_text(cx, text);
 
-        // LLM refine if enabled, or forced for Traditional Chinese (ASR only outputs simplified)
+        // LLM forced only when ASR output needs transformation:
+        // - zh-TW: ASR outputs simplified, LLM converts to traditional
+        // - wen: ASR outputs modern Chinese, LLM converts to classical
+        // English/Japanese/Korean: Qwen3-ASR handles natively, no LLM needed
         let cfg = &self.inner.config.llm_refine;
         let needs_llm = cfg.enabled
-            || self.inner.config.language == "zh-TW"   // simplified→traditional
-            || self.inner.config.language == "en"       // translation
-            || self.inner.config.language == "wen";     // 白话→文言文
+            || self.inner.config.language == "zh-TW"
+            || self.inner.config.language == "wen";
         if needs_llm && !cfg.api_base_url.is_empty() && !cfg.api_key.is_empty() {
             self.inner.state = STATE_REFINING;
             self.ui.label(cx, ids!(transcript_label)).set_text(cx, "✨ Refining...");
