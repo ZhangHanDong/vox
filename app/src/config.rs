@@ -24,12 +24,25 @@ pub struct HotkeyConfig {
     pub trigger: String,
 }
 
+/// How the app talks to the speech recognition HTTP service.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AsrBackend {
+    /// OminiX-style `POST /v1/audio/transcriptions` with JSON + base64 WAV.
+    #[default]
+    OminixJson,
+    /// vLLM / Qwen streaming ASR: `POST /api/start` → `/api/chunk` → `/api/finish` (octet-stream float32le PCM @ 16 kHz).
+    QwenStreaming,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OminixApiConfig {
     #[serde(default = "default_api_url")]
     pub base_url: String,
     #[serde(default = "default_asr_model")]
     pub asr_model: String,
+    #[serde(default)]
+    pub asr_backend: AsrBackend,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +135,7 @@ impl Default for OminixApiConfig {
         Self {
             base_url: default_api_url(),
             asr_model: default_asr_model(),
+            asr_backend: AsrBackend::default(),
         }
     }
 }

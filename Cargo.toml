@@ -1,3 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["macos-sys", "app"]
+
+# Pinned to one Makepad commit so clones build without a local makepad checkout.
+# (Some registry mirrors lag behind crates.io for makepad 2.x; git uses GitHub directly.)
+[workspace.dependencies]
+makepad-widgets = { git = "https://github.com/makepad/makepad.git", rev = "ce7da33f1d387b786abeb03b0bed73c79b7ca090" }
+makepad-objc-sys = { git = "https://github.com/makepad/makepad.git", rev = "ce7da33f1d387b786abeb03b0bed73c79b7ca090" }

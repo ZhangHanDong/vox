@@ -21,3 +21,6 @@
 
 # User config (contains API keys)
 # ~/.config/makepad-voice-input/config.json
+
+.env*
+!.env.example

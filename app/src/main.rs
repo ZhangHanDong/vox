@@ -30,6 +30,26 @@ const STATE_RECORDING: u8 = 1;
 const STATE_TRANSCRIBING: u8 = 2;
 const STATE_REFINING: u8 = 3;
 
+/// Qwen/vLLM streaming ASR in-flight step (after `POST /api/start`).
+#[allow(clippy::enum_variant_names)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AsrStreamPhase {
+    WaitStart,
+    WaitChunk,
+    WaitFinish,
+}
+
+/// Settings test for streaming ASR: start → chunk → finish.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[repr(u8)]
+enum TestAsrStreamPhase {
+    #[default]
+    Idle,
+    WaitStart,
+    WaitChunk,
+    WaitFinish,
+}
+
 script_mod! {
     use mod.prelude.widgets.*
 
@@ -115,7 +135,7 @@ script_mod! {
 
             settings_window := Window{
                 window.title: "Voice Input Settings"
-                window.inner_size: vec2(480, 560)
+                window.inner_size: vec2(480, 620)
                 window.position: vec2(500, 200)
                 body +: {
                     ScrollYView{
@@ -123,7 +143,11 @@ script_mod! {
                         flow: Down spacing: 12 padding: 24
                         new_batch: true
 
-                        Label{ text: "ominix-api" draw_text.color: #xffffff draw_text.text_style.font_size: 16 }
+                        Label{ text: "Speech / ASR API" draw_text.color: #xffffff draw_text.text_style.font_size: 16 }
+                        Label{ text: "Backend" draw_text.color: #xaaaaaa draw_text.text_style.font_size: 11 }
+                        asr_backend_dropdown := DropDown{
+                            labels: ["OminiX (JSON + base64)", "Qwen streaming (vLLM)"]
+                        }
                         Label{ text: "Base URL" draw_text.color: #xaaaaaa draw_text.text_style.font_size: 11 }
                         api_url_input := TextInput{ width: Fill height: 36 empty_text: "http://localhost:8080" }
 
@@ -192,6 +216,12 @@ struct Inner {
     last_wav: Vec<u8>,
     last_transcription: String,
     inject_state: text_inject::InjectState,
+    /// s16le PCM for `POST /api/chunk` (Qwen streaming); filled before start request.
+    asr_stream_pcm: Vec<u8>,
+    asr_stream_session_id: String,
+    asr_stream_phase: Option<AsrStreamPhase>,
+    test_asr_stream_phase: TestAsrStreamPhase,
+    test_asr_stream_session_id: String,
 }
 
 #[derive(Script, ScriptHook)]
@@ -311,6 +341,12 @@ impl App {
         let cfg = &self.inner.config;
         self.ui.text_input(cx, ids!(api_url_input))
             .set_text(cx, &cfg.ominix_api.base_url);
+        let asr_backend_idx = match cfg.ominix_api.asr_backend {
+            config::AsrBackend::OminixJson => 0,
+            config::AsrBackend::QwenStreaming => 1,
+        };
+        self.ui.drop_down(cx, ids!(asr_backend_dropdown))
+            .set_selected_item(cx, asr_backend_idx);
         self.ui.text_input(cx, ids!(llm_url_input))
             .set_text(cx, &cfg.llm_refine.api_base_url);
         self.ui.text_input(cx, ids!(llm_key_input))
@@ -333,8 +369,13 @@ impl App {
         let llm_key = self.ui.text_input(cx, ids!(llm_key_input)).text();
         let llm_model = self.ui.text_input(cx, ids!(llm_model_input)).text();
         let lang_idx = self.ui.drop_down(cx, ids!(language_dropdown)).selected_item();
+        let asr_backend_idx = self.ui.drop_down(cx, ids!(asr_backend_dropdown)).selected_item();
 
         self.inner.config.ominix_api.base_url = api_url;
+        self.inner.config.ominix_api.asr_backend = match asr_backend_idx {
+            1 => config::AsrBackend::QwenStreaming,
+            _ => config::AsrBackend::OminixJson,
+        };
         self.inner.config.llm_refine.api_base_url = llm_url;
         self.inner.config.llm_refine.api_key = llm_key;
         self.inner.config.llm_refine.model = llm_model;
@@ -355,12 +396,35 @@ impl App {
     }
 
     fn test_connection(&mut self, cx: &mut Cx) {
-        let url = format!(
-            "{}/v1/models",
-            self.ui.text_input(cx, ids!(api_url_input)).text().trim_end_matches('/')
-        );
-        let req = HttpRequest::new(url, HttpMethod::GET);
-        cx.http_request(live_id!(test_connection), req);
+        let base = self.ui.text_input(cx, ids!(api_url_input)).text();
+        let base = base.trim_end_matches('/');
+        let asr_backend_idx = self.ui.drop_down(cx, ids!(asr_backend_dropdown)).selected_item();
+
+        self.inner.test_asr_stream_phase = TestAsrStreamPhase::Idle;
+        self.inner.test_asr_stream_session_id.clear();
+
+        if asr_backend_idx == 1 {
+            self.inner.test_asr_stream_phase = TestAsrStreamPhase::WaitStart;
+            let app_lang = match self.ui.drop_down(cx, ids!(language_dropdown)).selected_item() {
+                0 => "zh",
+                1 => "en",
+                2 => "zh-TW",
+                3 => "ja",
+                4 => "ko",
+                5 => "wen",
+                _ => "zh",
+            };
+            transcribe::send_streaming_start(
+                cx,
+                transcribe::TEST_ASR_STREAM_START_ID,
+                base,
+                app_lang,
+            );
+        } else {
+            let url = format!("{base}/v1/models");
+            let req = HttpRequest::new(url, HttpMethod::GET);
+            cx.http_request(live_id!(test_connection), req);
+        }
         self.ui.label(cx, ids!(settings_status)).set_text(cx, "Testing...");
     }
 
@@ -387,7 +451,7 @@ impl App {
         // configure_window triggers makeKeyAndOrderFront on macOS
         settings.configure_window(
             cx,
-            dvec2(480.0, 560.0),
+            dvec2(480.0, 620.0),
             dvec2(500.0, 200.0),
             false,
             "Voice Input Settings".to_string(),
@@ -436,12 +500,39 @@ impl App {
         }
         self.inner.last_wav = audio::encode_wav(&samples, 16_000);
         self.ui.label(cx, ids!(transcript_label)).set_text(cx, "🔍 Transcribing...");
-        transcribe::send_transcribe_request(
-            cx,
-            &self.inner.config.ominix_api.base_url,
-            &self.inner.last_wav,
-            &self.inner.config.language,
-        );
+        let base = self.inner.config.ominix_api.base_url.trim_end_matches('/');
+        match self.inner.config.ominix_api.asr_backend {
+            config::AsrBackend::OminixJson => {
+                transcribe::send_transcribe_request(
+                    cx,
+                    base,
+                    &self.inner.last_wav,
+                    &self.inner.config.language,
+                    &self.inner.config.ominix_api.asr_model,
+                );
+            }
+            config::AsrBackend::QwenStreaming => {
+                self.inner.asr_stream_pcm = audio::pcm_f32_le_from_f32(&samples);
+                self.inner.asr_stream_phase = Some(AsrStreamPhase::WaitStart);
+                transcribe::send_streaming_start(
+                    cx,
+                    transcribe::ASR_STREAM_START_ID,
+                    base,
+                    &self.inner.config.language,
+                );
+            }
+        }
+    }
+
+    fn clear_asr_stream_state(&mut self) {
+        self.inner.asr_stream_pcm.clear();
+        self.inner.asr_stream_session_id.clear();
+        self.inner.asr_stream_phase = None;
+    }
+
+    fn fail_streaming_asr(&mut self, cx: &mut Cx, msg: &str) {
+        self.clear_asr_stream_state();
+        self.handle_error(cx, msg);
     }
 
     fn handle_transcribe_result(&mut self, cx: &mut Cx, text: &str) {
@@ -593,6 +684,98 @@ impl MatchEvent for App {
                 Ok(text) => self.handle_transcribe_result(cx, &text),
                 Err(e) => self.handle_error(cx, &format!("Transcription failed: {e}")),
             }
+        } else if request_id == transcribe::ASR_STREAM_START_ID {
+            match transcribe::parse_stream_start_response(response) {
+                Ok(sid) => {
+                    self.inner.asr_stream_session_id = sid.clone();
+                    self.inner.asr_stream_phase = Some(AsrStreamPhase::WaitChunk);
+                    let pcm = std::mem::take(&mut self.inner.asr_stream_pcm);
+                    let base = self.inner.config.ominix_api.base_url.trim_end_matches('/');
+                    transcribe::send_streaming_chunk(
+                        cx,
+                        transcribe::ASR_STREAM_CHUNK_ID,
+                        base,
+                        &sid,
+                        &pcm,
+                    );
+                }
+                Err(e) => self.fail_streaming_asr(cx, &format!("ASR start failed: {e}")),
+            }
+        } else if request_id == transcribe::ASR_STREAM_CHUNK_ID {
+            if response.status_code != 200 {
+                self.fail_streaming_asr(cx, &format!("ASR chunk failed: HTTP {}", response.status_code));
+                return;
+            }
+            let _ = transcribe::parse_streaming_asr_text(response);
+            self.inner.asr_stream_phase = Some(AsrStreamPhase::WaitFinish);
+            let base = self.inner.config.ominix_api.base_url.trim_end_matches('/');
+            let sid = self.inner.asr_stream_session_id.clone();
+            transcribe::send_streaming_finish(cx, transcribe::ASR_STREAM_FINISH_ID, base, &sid);
+        } else if request_id == transcribe::ASR_STREAM_FINISH_ID {
+            match transcribe::parse_streaming_asr_text(response) {
+                Ok(text) => {
+                    self.clear_asr_stream_state();
+                    self.handle_transcribe_result(cx, &text);
+                }
+                Err(e) => self.fail_streaming_asr(cx, &format!("ASR finish failed: {e}")),
+            }
+        } else if request_id == transcribe::TEST_ASR_STREAM_START_ID {
+            if self.inner.test_asr_stream_phase != TestAsrStreamPhase::WaitStart {
+                return;
+            }
+            match transcribe::parse_stream_start_response(response) {
+                Ok(sid) => {
+                    self.inner.test_asr_stream_session_id = sid.clone();
+                    self.inner.test_asr_stream_phase = TestAsrStreamPhase::WaitChunk;
+                    let base = self
+                        .ui
+                        .text_input(cx, ids!(api_url_input))
+                        .text()
+                        .trim_end_matches('/')
+                        .to_string();
+                    transcribe::send_streaming_chunk(
+                        cx,
+                        transcribe::TEST_ASR_STREAM_CHUNK_ID,
+                        &base,
+                        &sid,
+                        transcribe::test_stream_silence_pcm(),
+                    );
+                }
+                Err(e) => {
+                    self.inner.test_asr_stream_phase = TestAsrStreamPhase::Idle;
+                    self.ui
+                        .label(cx, ids!(settings_status))
+                        .set_text(cx, &format!("Error: {e}"));
+                }
+            }
+        } else if request_id == transcribe::TEST_ASR_STREAM_CHUNK_ID {
+            if self.inner.test_asr_stream_phase != TestAsrStreamPhase::WaitChunk {
+                return;
+            }
+            if response.status_code != 200 {
+                self.inner.test_asr_stream_phase = TestAsrStreamPhase::Idle;
+                self.ui
+                    .label(cx, ids!(settings_status))
+                    .set_text(cx, &format!("Error: HTTP {}", response.status_code));
+                return;
+            }
+            self.inner.test_asr_stream_phase = TestAsrStreamPhase::WaitFinish;
+            let base_owned = self.ui.text_input(cx, ids!(api_url_input)).text();
+            let base = base_owned.trim_end_matches('/');
+            let sid = self.inner.test_asr_stream_session_id.clone();
+            transcribe::send_streaming_finish(cx, transcribe::TEST_ASR_STREAM_FINISH_ID, base, &sid);
+        } else if request_id == transcribe::TEST_ASR_STREAM_FINISH_ID {
+            self.inner.test_asr_stream_phase = TestAsrStreamPhase::Idle;
+            self.inner.test_asr_stream_session_id.clear();
+            if response.status_code == 200 {
+                self.ui
+                    .label(cx, ids!(settings_status))
+                    .set_text(cx, "Connected (streaming)");
+            } else {
+                self.ui
+                    .label(cx, ids!(settings_status))
+                    .set_text(cx, &format!("Error: HTTP {}", response.status_code));
+            }
         } else if request_id == llm_refine::LLM_REFINE_REQUEST_ID {
             match llm_refine::parse_refine_response(response) {
                 Ok(text) => self.handle_refine_result(cx, &text),
@@ -616,6 +799,20 @@ impl MatchEvent for App {
     fn handle_http_request_error(&mut self, cx: &mut Cx, request_id: LiveId, _err: &HttpError) {
         if request_id == transcribe::TRANSCRIBE_REQUEST_ID {
             self.handle_error(cx, "Service unavailable");
+        } else if request_id == transcribe::ASR_STREAM_START_ID
+            || request_id == transcribe::ASR_STREAM_CHUNK_ID
+            || request_id == transcribe::ASR_STREAM_FINISH_ID
+        {
+            self.fail_streaming_asr(cx, "ASR service unavailable");
+        } else if request_id == transcribe::TEST_ASR_STREAM_START_ID
+            || request_id == transcribe::TEST_ASR_STREAM_CHUNK_ID
+            || request_id == transcribe::TEST_ASR_STREAM_FINISH_ID
+        {
+            self.inner.test_asr_stream_phase = TestAsrStreamPhase::Idle;
+            self.inner.test_asr_stream_session_id.clear();
+            self.ui
+                .label(cx, ids!(settings_status))
+                .set_text(cx, "Connection failed");
         } else if request_id == llm_refine::LLM_REFINE_REQUEST_ID {
             let original = self.inner.last_transcription.clone();
             self.inject_text(cx, &original);

@@ -198,3 +198,15 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
 
     buf
 }
+
+/// Raw mono float32 little-endian PCM at 16 kHz (no header).
+/// Qwen3-ASR / vLLM streaming servers decode `application/octet-stream` chunks as `float32`
+/// (see multimodal pipeline); **s16le is misinterpreted** and often becomes all-zero `float32`.
+pub fn pcm_f32_le_from_f32(samples: &[f32]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(samples.len() * 4);
+    for &sample in samples {
+        let clamped = sample.clamp(-1.0, 1.0);
+        buf.extend_from_slice(&clamped.to_le_bytes());
+    }
+    buf
+}
